@@ -1,11 +1,12 @@
 from config.app import celery_app, app as flask_app
 from config.redisconfig import redis
+from utils.neo4j import Neo4jGraph
 from utils.scope import fetch_topology_data
 from utils.esconn import ESConn
 from utils.helper import get_topology_network_graph, get_recent_scan_ids, split_list_into_chunks, \
     get_top_exploitable_vulnerabilities
 from utils.constants import CLOUD_RESOURCES_CACHE_KEY, NODE_TYPE_HOST, NODE_TYPE_CONTAINER, CLOUD_AWS, CLOUD_GCP, \
-    CLOUD_AZURE, THREAT_GRAPH_CACHE_KEY, THREAT_GRAPH_NODE_DETAIL_KEY, CSPM_RESOURCE_LABELS, NODE_TYPE_LABEL, \
+    CLOUD_AZURE, NODE_TYPE_POD, NODE_TYPE_PROCESS, THREAT_GRAPH_CACHE_KEY, THREAT_GRAPH_NODE_DETAIL_KEY, CSPM_RESOURCE_LABELS, NODE_TYPE_LABEL, \
     CSPM_RESOURCES, ES_MAX_CLAUSE, CVE_INDEX, COMPLIANCE_INDEX, CLOUD_COMPLIANCE_LOGS_INDEX, SECRET_SCAN_LOGS_INDEX, \
     TIME_UNIT_MAPPING, ES_TERMS_AGGR_SIZE, CVE_SCAN_LOGS_INDEX, COMPLIANCE_LOGS_INDEX, CLOUD_COMPLIANCE_INDEX, \
     SECRET_SCAN_INDEX, CLOUD_TOPOLOGY_COUNT
@@ -13,6 +14,7 @@ import networkx as nx
 from collections import defaultdict
 import json
 import arrow
+from neo4j import GraphDatabase
 
 incoming_internet_host_id = "in-theinternet"
 outgoing_internet_host_id = "out-theinternet"
@@ -458,6 +460,292 @@ def get_secrets_count():
     # return get_mis_config_count(SECRET_SCAN_INDEX, SECRET_SCAN_LOGS_INDEX, "node_id")
     return {}
 
+def internet_node_id(cp):
+    if cp == CLOUD_AWS:
+        return incoming_internet_host_id+str(0)
+    elif cp == CLOUD_AZURE:
+        return incoming_internet_host_id+str(1)
+    elif cp == CLOUD_GCP:
+        return incoming_internet_host_id+str(2)
+    else:
+        return incoming_internet_host_id+str(3)
+
+def add_node_neo4j(neo4jg, node_id, node_details):
+    id_type = node_id.split(';')
+    if len(id_type) != 2 or id_type[1] == "":
+        node_type = ""
+    else:
+        node_type = id_type[1][1:-1]
+
+    cp = ""
+    for metadata in node_details.get("metadata", []):
+        if metadata["id"] == "cloud_provider":
+            cp = metadata["value"]
+            break
+    if cp not in CLOUD_PROVIDERS:
+        cp = pvt_cloud
+    if cp == CLOUD_GCP:
+        cp = CLOUD_GCP
+
+    if id_type[0] == incoming_internet_host_id:
+        for cp in ALL_CLOUD_PROVIDERS:
+            neo4jg.add_host_entry({'node_id': internet_node_id(cp), 'node_type': node_type, 'cloud_provider':  cp, 'depth': 0})
+    else:
+        neo4jg.add_host_entry({'node_id': id_type[0], 'node_type': node_type, 'cloud_provider':  cp})
+    for node in node_details.get("adjacency", []):
+        node_id = node.split(';')[0]
+        if id_type[0] == incoming_internet_host_id:
+            for cp in ALL_CLOUD_PROVIDERS:
+                neo4jg.add_connection_entry(internet_node_id(cp), node_id)
+        else:
+            neo4jg.add_connection_entry(id_type[0], node_id)
+
+def get_attack_paths_neo4j(neo4jg):
+    all = {}
+    providers = [CLOUD_AWS, CLOUD_AZURE, CLOUD_GCP, pvt_cloud]
+    aggreg = neo4jg.compute_threat_graph(providers)
+    print(aggreg)
+
+    host_id = 0
+    container_id = 0
+    infos = {}
+    for cp in providers:
+        tree = aggreg[cp][0]
+        data = aggreg[cp][1]
+        depths = aggreg[cp][2]
+        if 1 not in depths:
+            continue
+        root = depths[1].pop()
+        graphs = []
+        while root:
+            visited = set()
+            attack_paths = build_attack_paths(tree, data, root, visited)
+            info = attack_paths_to_nodes_info(attack_paths, data, cp, host_id, container_id)
+            for k in info:
+                infos[info[k]['id']] = info[k]
+            graph = attack_paths_to_graph(attack_paths, info)
+            for g in graph:
+                graphs.append(g)
+            if len(depths[1]) == 0:
+                break
+            root = depths[1].pop()
+        all[cp] = graphs
+    print(all)
+    return all, infos
+
+def build_attack_paths(tree, data, root, visited):
+    if root in visited:
+        return []
+    visited.add(root)
+    if not root or root not in data:
+        return []
+    if not tree.get(root):
+        return [[root]]
+    paths = []
+    for edge in tree.get(root):
+        edge_paths = build_attack_paths(tree, data, edge, visited)
+        for edge_path in edge_paths:
+            edge_path.insert(0, root)
+            paths.append(edge_path)
+    if len(paths) == 0:
+        return [[root]]
+    return paths
+
+def attack_paths_to_nodes_info(attack_paths, data, cp, host_id, container_id):
+    nodes_info = {}
+    visited = set()
+    for attack_path in attack_paths:
+        for i in range(0, len(attack_path)):
+            node_id = attack_path[i]
+            if node_id in visited:
+                continue
+            visited.add(node_id)
+            entry = {}
+            node = data[node_id]
+            if node[0] == 'host':
+                entry['label'] = 'Compute Instance'
+                entry['id'] = cp+"-host-"+str(host_id)
+                host_id += 1
+            elif node[0] == 'container':
+                entry['label'] = 'Container'
+                entry['id'] = cp+"-container-"+str(container_id)
+                container_id += 1
+            else:
+                entry['name'] = "The Internet"
+                entry['id'] = "The Internet"
+
+            entry['count'] = node[3]
+            entry['vulnerability_count'] = node[1]
+            entry['secrets_count'] = node[7]
+            entry['compliance_count'] = node[9]
+            entry['node_type'] = node[0]
+            internal_nodes = {}
+            for i in range(0, len(node[5])):
+                internal_node = node[5][i]
+                internal_node_cve = node[6][i] if node[6] and i < len(node[6]) else 0
+                internal_node_secrets = node[8][i] if node[8] and i < len(node[8]) else 0
+                internal_node_compliance = node[10][i] if node[10] and i < len(node[10]) else 0
+                internal_nodes[internal_node] = {}
+                internal_nodes[internal_node]["node_id"] = ""
+                internal_nodes[internal_node]["image_name"] = ""
+                internal_nodes[internal_node]["name"] = internal_node
+                internal_nodes[internal_node]["vulnerability_count"] = internal_node_cve
+                internal_nodes[internal_node]["vulnerability_scan_id"] = {}
+                internal_nodes[internal_node]["secrets_count"] = internal_node_secrets
+                internal_nodes[internal_node]["secrets_scan_id"] = {}
+                internal_nodes[internal_node]["compliance_count"] = internal_node_compliance
+                internal_nodes[internal_node]["compliance_scan_id"] = {}
+            entry["nodes"] = internal_nodes
+
+            nodes_info[node_id] = entry
+
+    return nodes_info
+
+
+def attack_paths_to_graph(attack_paths, info):
+    res = []
+    for attack_path in attack_paths:
+        for i in range(0, len(attack_path)):
+            entry = info[attack_path[i]].copy()
+            path = []
+            for node_id in reversed(attack_path[:(len(attack_path)-i+1)]):
+                name = info[node_id]["id"]
+                path.insert(0, name)
+            path.insert(0, 'The Internet')
+            entry['attack_path'] = [path]
+            res.append(entry)
+    return res
+
+def insert_into_neo4j():
+    topology_processes = fetch_topology_data(NODE_TYPE_PROCESS, format="scope")
+    process_nodes_batch = []
+    process_edges_batch = []
+    process_parent_batch = []
+    for node_id, node_details in topology_processes.items():
+        if not node_details.get("adjacency"):
+            continue
+        parent = node_details["id"].split(';')[0]
+        host_id = node_details["id"]
+        process_nodes_batch.append({'node_id': host_id})
+        process_parent_batch.append({'left': parent, 'right': host_id})
+        for adja in node_details.get("adjacency"):
+            process_edges_batch.append({'left': node_details["id"], 'right': adja})
+    topology_pods = fetch_topology_data(NODE_TYPE_POD, format="scope")
+
+    pod_nodes_batch = []
+    pod_edges_batch = []
+    for node_id, node_details in topology_pods.items():
+        if not node_details.get("adjacency"):
+            continue
+        host_id = node_details["id"].split(';')[0]
+        pod_nodes_batch.append({'node_id': host_id})
+        for adja in node_details.get("adjacency"):
+            pod_edges_batch.append({'left': node_details["id"], 'right': adja})
+
+    topology_hosts = fetch_topology_data(NODE_TYPE_HOST, format="scope")
+    topology_containers = fetch_topology_data(NODE_TYPE_CONTAINER, format="scope")
+    host_cloud = {}
+
+    host_nodes_batch = []
+    host_edges_batch = []
+    for node_id, node_details in topology_hosts.items():
+        node_name = node_details.get("name", node_details.get("label"))
+        host_id = node_id.split(';')[0]
+        if node_details.get("pseudo", False):
+            if node_name == "The Internet":
+                host_nodes_batch.append({'node_id': node_id, 'node_type': ''})
+                for node in node_details.get("adjacency", []):
+                    id = node.split(';')[0]
+                    if id == incoming_internet_host_id:
+                        for cp in ALL_CLOUD_PROVIDERS:
+                            host_edges_batch.append({'left': internet_node_id(cp), 'right': node_id})
+                    else:
+                        host_edges_batch.append({'left': node_id, 'right': id})
+            continue
+        cp = ""
+        for metadata in node_details.get("metadata", []):
+            if metadata["id"] == "cloud_provider":
+                cp = metadata["value"]
+                break
+        if cp not in CLOUD_PROVIDERS:
+            cp = pvt_cloud
+        if cp == CLOUD_GCP:
+            cp = CLOUD_GCP
+        host_cloud[node_id] = cp
+        host_nodes_batch.append({'node_id': node_id, 'node_type': 'host', 'cloud_provider': cp})
+        for node in node_details.get("adjacency", []):
+            id = node.split(';')[0]
+            if id == incoming_internet_host_id:
+                for cp in ALL_CLOUD_PROVIDERS:
+                    host_edges_batch.append({'left': internet_node_id(cp), 'right': node_id})
+            else:
+                host_edges_batch.append({'left': node_id, 'right': id})
+
+    container_nodes_batch = []
+    container_edges_batch = []
+    for node_id, node_details in topology_containers.items():
+        node_name = node_details.get("name", node_details.get("label"))
+        if node_details.get("pseudo", False):
+            if node_name == "The Internet":
+                container_nodes_batch.append({'node_id': node_id, 'node_type': ''})
+                host_id = node_id.split(';')[0]
+                for node in node_details.get("adjacency", []):
+                    node_id = node.split(';')[0]
+                    if node_id == incoming_internet_host_id:
+                        for cp in ALL_CLOUD_PROVIDERS:
+                            container_edges_batch.append({'left': internet_node_id(cp), 'right': node_id})
+                    else:
+                        container_edges_batch.append({'left': host_id, 'right': node_id})
+            continue
+        host_name = node_details.get("labelMinor")
+        if not host_name:
+            continue
+        cp = host_cloud.get(host_name, pvt_cloud)
+        container_nodes_batch.append({'node_id': node_id, 'node_type': 'container', 'cloud_provider': cp})
+        host_id = node_id.split(';')[0]
+        for node in node_details.get("adjacency", []):
+            node_id = node.split(';')[0]
+            if node_id == incoming_internet_host_id:
+                for cp in ALL_CLOUD_PROVIDERS:
+                    container_edges_batch.append({'left': internet_node_id(cp), 'right': node_id})
+            else:
+                container_edges_batch.append({'left': host_id, 'right': node_id})
+
+    driver = GraphDatabase.driver("bolt://neo4j-db:7687", auth=("neo4j", "password"))
+
+    try:
+        with driver.session() as session:
+            with session.begin_transaction() as tx:
+                    tx.run("CREATE CONSTRAINT ON (n:Process) ASSERT n.node_id IS UNIQUE")
+                    tx.run("CREATE CONSTRAINT ON (n:Node) ASSERT n.node_id IS UNIQUE")
+                    tx.commit()
+    except:
+        print('constraints already existing')
+
+
+    print(len(host_nodes_batch))
+    print(len(container_nodes_batch))
+    print(len(process_nodes_batch))
+    print(len(pod_nodes_batch))
+
+    print(len(host_edges_batch))
+    print(len(container_edges_batch))
+    print(len(process_edges_batch))
+    print(len(pod_edges_batch))
+    with driver.session() as session:
+        with session.begin_transaction() as tx:
+            tx.run("UNWIND $batch as row MERGE (n:Node{node_id:row.node_id}) SET n+= row", batch=host_nodes_batch)
+            tx.run("UNWIND $batch as row MERGE (n:Node{node_id:row.node_id}) SET n+= row", batch=container_nodes_batch)
+            tx.run("UNWIND $batch as row MERGE (n:Process{node_id:row.node_id}) SET n+= row", batch=process_nodes_batch)
+            tx.run("UNWIND $batch as row MERGE (n:Node{node_id:row.node_id}) SET n+= row", batch=pod_nodes_batch)
+            tx.run("UNWIND $batch as row MATCH (n:Node{node_id: row.left}),(m:Node{node_id: row.right}) MERGE (n)-[:CONNECTED]->(m) ", batch=host_edges_batch)
+            tx.run("UNWIND $batch as row MATCH (n:Node{node_id: row.left}),(m:Node{node_id: row.right}) MERGE (n)-[:CONNECTED]->(m) ", batch=container_edges_batch)
+            tx.run("UNWIND $batch as row MATCH (n:Process{node_id: row.left}),(m:Process{node_id: row.right}) MERGE (n)-[:CONNECTED]->(m) ", batch=process_edges_batch)
+            tx.run("UNWIND $batch as row MATCH (n:Node{node_id: row.left}),(m:Node{node_id: row.right}) MERGE (n)-[:CONNECTED]->(m) ", batch=pod_edges_batch)
+            tx.run("UNWIND $batch as row MATCH (n:Node{node_id: row.left}),(m:Process{node_id: row.right}) MERGE (n)-[:RUNS]->(m) ", batch=process_parent_batch)
+            tx.commit()
+
+
 
 def _compute_threat_graph():
     # Get count of vulnerability, compliance, secrets
@@ -488,46 +776,13 @@ def _compute_threat_graph():
             flask_app.logger.error("Error in threat graph: {0}".format(ex))
 
     # Get topology data
-    topology_hosts = fetch_topology_data(NODE_TYPE_HOST, format="scope")
-    topology_containers = fetch_topology_data(NODE_TYPE_CONTAINER, format="scope")
-    host_cloud = {}
-    cloud_vms = {CLOUD_AWS: {}, CLOUD_AZURE: {}, CLOUD_GCP: {}, pvt_cloud: {}}
-    cloud_containers = {CLOUD_AWS: {}, CLOUD_AZURE: {}, CLOUD_GCP: {}, pvt_cloud: {}}
-    for node_id, node_details in topology_hosts.items():
-        node_name = node_details.get("name", node_details.get("label"))
-        if node_details.get("pseudo", False):
-            if node_name == "The Internet":
-                for cp, nodes in cloud_vms.items():
-                    cloud_vms[cp][node_id] = node_details
-            continue
-        cp = ""
-        for metadata in node_details.get("metadata", []):
-            if metadata["id"] == "cloud_provider":
-                cp = metadata["value"]
-                break
-        if cp not in CLOUD_PROVIDERS:
-            cp = pvt_cloud
-        if cp == CLOUD_GCP:
-            cp = CLOUD_GCP
-        host_cloud[node_details.get("label", "")] = cp
-        cloud_vms[cp][node_id] = node_details
-    for node_id, node_details in topology_containers.items():
-        node_name = node_details.get("name", node_details.get("label"))
-        if node_details.get("pseudo", False):
-            if node_name == "The Internet":
-                for cp, nodes in cloud_containers.items():
-                    cloud_containers[cp][node_id] = node_details
-            continue
-        host_name = node_details.get("labelMinor")
-        if not host_name:
-            continue
-        cp = host_cloud.get(host_name, pvt_cloud)
-        cloud_containers[cp][node_id] = node_details
-    for cloud_provider in ALL_CLOUD_PROVIDERS:
-        graph[cloud_provider] = get_topology_network_graph(cloud_vms[cloud_provider], graph[cloud_provider],
-                                                           node_type=NODE_TYPE_HOST, include_nodes=include_nodes)
-        graph[cloud_provider] = get_topology_network_graph(cloud_containers[cloud_provider], graph[cloud_provider],
-                                                           node_type=NODE_TYPE_CONTAINER, include_nodes=include_nodes)
+    neo4jg = Neo4jGraph()
+    #neo4jg.clear_connections()
+    #neo4jg.add_host_entry({"node_id": internet_node_id(CLOUD_AWS), "node_type":"", "depth": 0,"cloud_provider": CLOUD_AWS})
+    #neo4jg.add_host_entry({"node_id": internet_node_id(CLOUD_AZURE), "node_type":"", "depth": 0,"cloud_provider": CLOUD_AZURE})
+    #neo4jg.add_host_entry({"node_id": internet_node_id(CLOUD_GCP), "node_type":"", "depth": 0,"cloud_provider": CLOUD_GCP})
+    #neo4jg.add_host_entry({"node_id": internet_node_id(pvt_cloud), "node_type":"", "depth": 0,"cloud_provider": pvt_cloud})
+    #neo4jg.add_host_entry({"node_id": outgoing_internet_host_id, "node_type":""})
 
     threat_graph = {
         CLOUD_AWS: {"count": 0, "secrets_count": 0, "vulnerability_count": 0, "compliance_count": 0, "resources": {}},
@@ -535,115 +790,15 @@ def _compute_threat_graph():
         CLOUD_GCP: {"count": 0, "secrets_count": 0, "vulnerability_count": 0, "compliance_count": 0, "resources": {}},
         pvt_cloud: {"count": 0, "secrets_count": 0, "vulnerability_count": 0, "compliance_count": 0, "resources": {}}
     }
-    threat_graph_paths = defaultdict(dict)
-    threat_graph_node = {}
 
+    attack_paths, infos = get_attack_paths_neo4j(neo4jg)
     for cloud_provider in ALL_CLOUD_PROVIDERS:
-        node_data = dict(graph[cloud_provider].nodes.data())
-        for node_id, meta in node_data.items():
-            if incoming_internet_host_id == node_id or outgoing_internet_host_id == node_id:
-                continue
-            if not meta:
-                continue
-            try:
-                shortest_paths_generator_in = nx.all_simple_paths(
-                    graph[cloud_provider], incoming_internet_host_id, node_id, 2)
-                for _, path in enumerate(shortest_paths_generator_in):
-                    p = []
-                    p_str = ""
-                    counter = 0
-                    for i in path:
-                        if i == incoming_internet_host_id:
-                            p.append("The Internet")
-                            p_str += "The Internet"
-                        else:
-                            n = cloud_provider + "-" + node_data[i]["node_type"] + "-" + str(counter)
-                            p.append(n)
-                            p_str += "," + n
-                        counter += 1
-                    node_type = meta["node_type"]
-                    key = cloud_provider + "-" + node_type + "-" + str(len(path) - 1)
-                    label = node_type
-                    if node_type in NODE_TYPE_LABEL:
-                        label = NODE_TYPE_LABEL[node_type]
-                    elif node_type in CSPM_RESOURCES:
-                        if CSPM_RESOURCES[node_type] in CSPM_RESOURCE_LABELS:
-                            label = CSPM_RESOURCE_LABELS[CSPM_RESOURCES[node_type]]
-                    vulnerability_count = 0
-                    vulnerability_scan_id = {}
-                    compliance_scan_id = {}
-                    secrets_count = 0
-                    secrets_scan_id = {}
-                    cloud_id = ""
-                    if node_type == NODE_TYPE_HOST:
-                        vulnerability_count = vulnerability_count_map.get(meta["name"], {}).get("count", 0)
-                        if vulnerability_count > 0:
-                            vulnerability_scan_id = vulnerability_count_map[meta["name"]]["scan_id"]
-                        compliance_count = compliance_count_map.get(node_id, {}).get("count", 0)
-                        if compliance_count > 0:
-                            compliance_scan_id = compliance_count_map[node_id]["scan_id"]
-                        if meta.get("cloud_id"):
-                            cloud_id = meta["cloud_id"]
-                            compliance_count += cloud_compliance_count_map.get(cloud_id, {}).get("count", 0)
-                            compliance_scan_id = {
-                                **cloud_compliance_count_map.get(cloud_id, {}).get("scan_id", {}),
-                                **compliance_scan_id,
-                            }
-                        secrets_count = secrets_count_map.get(node_id, {}).get("count", 0)
-                        if secrets_count > 0:
-                            secrets_scan_id = secrets_count_map[node_id]["scan_id"]
-                    elif node_type == NODE_TYPE_CONTAINER:
-                        vulnerability_count = vulnerability_count_map.get(meta["image_name"], {}).get("count", 0)
-                        if vulnerability_count > 0:
-                            vulnerability_scan_id = vulnerability_count_map[meta["image_name"]]["scan_id"]
-                        compliance_count = compliance_count_map.get(node_id, {}).get("count", 0)
-                        if compliance_count > 0:
-                            compliance_scan_id = compliance_count_map[node_id]["scan_id"]
-                        secrets_count = secrets_count_map.get(node_id, {}).get("count", 0)
-                        if secrets_count > 0:
-                            secrets_scan_id = secrets_count_map[node_id]["scan_id"]
-                    else:
-                        cloud_id = node_id
-                        compliance_count = cloud_compliance_count_map.get(node_id, {}).get("count", 0)
-                        compliance_scan_id = cloud_compliance_count_map.get(node_id, {}).get("scan_id", {})
-                    if key not in threat_graph_node:
-                        threat_graph_node[key] = {
-                            "label": label, "id": key, "nodes": {}, "node_type": node_type}
-                    threat_graph_node[key]["nodes"][node_id] = {
-                        "node_id": node_id, "name": meta["name"], "image_name": meta.get("image_name", ""),
-                        "vulnerability_count": vulnerability_count, "vulnerability_scan_id": vulnerability_scan_id,
-                        "compliance_count": compliance_count, "compliance_scan_id": compliance_scan_id,
-                        "secrets_count": secrets_count, "secrets_scan_id": secrets_scan_id, "cloud_id": cloud_id
-                    }
-                    if key in threat_graph[cloud_provider]["resources"]:
-                        if not threat_graph_paths[key][p_str]:
-                            threat_graph[cloud_provider]["resources"][key]["attack_path"].append(p)
-                        threat_graph[cloud_provider]["resources"][key]["count"] += 1
-                        threat_graph[cloud_provider]["resources"][key]["vulnerability_count"] += vulnerability_count
-                        threat_graph[cloud_provider]["resources"][key]["secrets_count"] += secrets_count
-                        threat_graph[cloud_provider]["resources"][key]["compliance_count"] += compliance_count
-                    else:
-                        threat_graph_paths[key][p_str] = True
-                        threat_graph[cloud_provider]["resources"][key] = {
-                            "attack_path": [p], "count": 1, "vulnerability_count": vulnerability_count,
-                            "compliance_count": compliance_count, "secrets_count": secrets_count,
-                            "label": label, "id": key, "node_type": node_type,
-                        }
-                    threat_graph[cloud_provider]["count"] += 1
-                    threat_graph[cloud_provider]["vulnerability_count"] += vulnerability_count
-                    threat_graph[cloud_provider]["secrets_count"] += secrets_count
-                    threat_graph[cloud_provider]["compliance_count"] += compliance_count
-            except nx.NetworkXNoPath:
-                pass
-            except Exception as ex:
-                flask_app.logger.error("Error in threat graph: {0}".format(ex))
+        if cloud_provider in attack_paths:
+            threat_graph[cloud_provider]["resources"] = attack_paths[cloud_provider]
 
-    for cloud_provider, _ in threat_graph.items():
-        threat_graph[cloud_provider]["resources"] = list(threat_graph[cloud_provider]["resources"].values())
     redis.set(THREAT_GRAPH_CACHE_KEY, json.dumps(threat_graph))
-    threat_graph_node_detail = {k: json.dumps(v) for k, v in threat_graph_node.items()}
-    if threat_graph_node_detail:
-        redis.hset(THREAT_GRAPH_NODE_DETAIL_KEY, mapping=threat_graph_node_detail)
+    threat_graph_node_detail = {k: json.dumps(v) for k, v in infos.items()}
+    redis.hset(THREAT_GRAPH_NODE_DETAIL_KEY, mapping=threat_graph_node_detail)
 
 
 @celery_app.task

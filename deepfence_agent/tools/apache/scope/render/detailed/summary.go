@@ -67,6 +67,7 @@ type NodeSummary struct {
 	Tables            []report.Table       `json:"tables,omitempty"`
 	Adjacency         report.IDList        `json:"adjacency,omitempty"`
 	ImmediateParentID string               `json:"immediate_parent_id"`
+	Type              string               `json:"type"`
 }
 
 var renderers = map[string]func(BasicNodeSummary, report.Node) BasicNodeSummary{
@@ -544,10 +545,8 @@ func Summaries(ctx context.Context, rc RenderContext, rns report.Nodes, adjacenc
 
 	result := NodeSummaries{}
 	for id, node := range rns {
-		if adjacency == false {
-			node.Adjacency = report.MakeIDList()
-		}
-		if summary, ok := MakeNodeSummary(rc, node, ignoreMetadata, ignoreMetrics); ok {
+		summary, ok := MakeNodeSummary(rc, node, ignoreMetadata, ignoreMetrics)
+		if ok {
 			for i, m := range summary.Metrics {
 				summary.Metrics[i] = m.Summary()
 			}

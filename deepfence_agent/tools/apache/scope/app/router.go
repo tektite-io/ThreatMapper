@@ -119,8 +119,11 @@ func RegisterTopologyRoutes(router *mux.Router, r Reporter, capabilities map[str
 }
 
 // RegisterReportPostHandler registers the handler for report submission
-func RegisterReportPostHandler(a Adder, router *mux.Router) {
+func RegisterReportPostHandler(a Adder, router *mux.Router, r Reporter) {
 	post := router.Methods("POST").Subrouter()
+	post.Handle("/topology-api/topology-graph",
+		requestContextDecorator(captureReporter(r, handleTopologyGraph))).
+		Name("api_topology_graph")
 	post.HandleFunc("/topology-api/report", requestContextDecorator(func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 		var (
 			buf    = &bytes.Buffer{}
@@ -159,6 +162,43 @@ func RegisterReportPostHandler(a Adder, router *mux.Router) {
 
 		//if err := a.Add(ctx, *rpt, buf.Bytes()); err != nil {
 		var unusedParam []byte
+		//for i := 0; i < 2500; i++ {
+		//	rpts := rpt.Copy()
+		//	for k, n := range rpts.Host.Nodes {
+		//		n.ID = fmt.Sprintf("%v%v", i, n.ID)
+		//		n.Latest = n.Latest.Set("host_name", time.Now(), n.ID)
+		//		n.Latest = n.Latest.Set("host_node_id", time.Now(), n.ID)
+		//		n.Latest = n.Latest.Set("probeId", time.Now(), n.ID)
+		//		n.Latest = n.Latest.Set("control_probe_id", time.Now(), n.ID)
+		//		rpts.Host.Nodes[k] = n
+		//	}
+
+		//	for k, n := range rpts.Process.Nodes {
+		//		n.ID = fmt.Sprintf("%v%v", i, n.ID)
+		//		rpts.Process.Nodes[k] = n
+		//	}
+
+		//	for k, n := range rpts.Endpoint.Nodes {
+		//		n.ID = fmt.Sprintf("%v%v", i, n.ID)
+		//		host,_ := n.Latest.Lookup("host_node_id")
+		//		n.Latest = n.Latest.Set("host_node_id", time.Now(), fmt.Sprintf("%v%v", i, host))
+		//		rpts.Endpoint.Nodes[k] = n
+		//	}
+
+		//	for k, n := range rpts.Container.Nodes {
+		//		n.ID = fmt.Sprintf("%v%v", i, n.ID)
+		//		n.Latest = n.Latest.Set("host_name", time.Now(), n.ID)
+		//		n.Latest = n.Latest.Set("host_node_id", time.Now(), n.ID)
+		//		rpts.Container.Nodes[k] = n
+		//	}
+
+		//	if err := a.Add(ctx, rpts, unusedParam); err != nil {
+		//		log.Errorf("Error Adding report: %v", err)
+		//		respondWith(ctx, w, http.StatusInternalServerError, err)
+		//		return
+		//	}
+		//}
+
 		if err := a.Add(ctx, *rpt, unusedParam); err != nil {
 			log.Errorf("Error Adding report: %v", err)
 			respondWith(ctx, w, http.StatusInternalServerError, err)
@@ -197,11 +237,6 @@ func NewVersion(version, downloadURL string) {
 
 func apiHandler(rep Reporter, capabilities map[string]bool) CtxHandlerFunc {
 	return func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-		//report, err := rep.Report(ctx, time.Now())
-		//if err != nil {
-		//	respondWith(w, http.StatusInternalServerError, err)
-		//	return
-		//}
 		respondWith(ctx, w, http.StatusOK, xfer.Details{
 			ID:           UniqueID,
 			Version:      Version,

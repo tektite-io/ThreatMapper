@@ -66,7 +66,7 @@ func router(collector app.Collector, controlRouter app.ControlRouter, pipeRouter
 	}
 	router.Path("/metrics").Handler(promhttp.Handler())
 
-	app.RegisterReportPostHandler(collector, router)
+	app.RegisterReportPostHandler(collector, router, collector)
 	app.RegisterControlRoutes(router, controlRouter)
 	app.RegisterPipeRoutes(router, pipeRouter)
 	app.RegisterTopologyRoutes(router, app.WebReporter{Reporter: collector, MetricsGraphURL: metricsGraphURL}, capabilities)
@@ -102,6 +102,12 @@ func collectorFactory(userIDer multitenant.UserIDer, collectorURL, s3URL string,
 			return nil, err
 		}
 		return asyncCollector, nil
+	} else if collectorURL == "neo4j" {
+		neo4jCollector, err := app.NewNeo4jCollector(window)
+		if err != nil {
+			return nil, err
+		}
+		return neo4jCollector, nil
 	}
 
 	parsed, err := url.Parse(collectorURL)

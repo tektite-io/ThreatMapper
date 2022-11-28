@@ -23,6 +23,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/deepfence/fetcher_api_server/topology"
+	"github.com/deepfence/fetcher_api_server/types"
 	"github.com/gomodule/redigo/redis"
 	_ "github.com/lib/pq"
 	elastic "github.com/olivere/elastic/v7"
@@ -98,57 +100,6 @@ func NewVulnerabilityDbUpdater() *VulnerabilityDbUpdater {
 		}
 	}
 	return updater
-}
-
-type ComplianceDoc struct {
-	DocId                 string `json:"doc_id"`
-	Type                  string `json:"type"`
-	TimeStamp             int64  `json:"time_stamp"`
-	Timestamp             string `json:"@timestamp"`
-	Masked                string `json:"masked"`
-	NodeId                string `json:"node_id"`
-	NodeType              string `json:"node_type"`
-	KubernetesClusterName string `json:"kubernetes_cluster_name"`
-	KubernetesClusterId   string `json:"kubernetes_cluster_id"`
-	NodeName              string `json:"node_name"`
-	TestCategory          string `json:"test_category"`
-	TestNumber            string `json:"test_number"`
-	TestInfo              string `json:"description"`
-	RemediationScript     string `json:"remediation_script,omitempty"`
-	RemediationAnsible    string `json:"remediation_ansible,omitempty"`
-	RemediationPuppet     string `json:"remediation_puppet,omitempty"`
-	Resource              string `json:"resource"`
-	TestRationale         string `json:"test_rationale"`
-	TestSeverity          string `json:"test_severity"`
-	TestDesc              string `json:"test_desc"`
-	Status                string `json:"status"`
-	ComplianceCheckType   string `json:"compliance_check_type"`
-	ScanId                string `json:"scan_id"`
-	ComplianceNodeType    string `json:"compliance_node_type"`
-}
-
-type CloudComplianceDoc struct {
-	DocId               string `json:"doc_id"`
-	Timestamp           string `json:"@timestamp"`
-	Count               int    `json:"count,omitempty"`
-	Reason              string `json:"reason"`
-	Resource            string `json:"resource"`
-	Status              string `json:"status"`
-	Region              string `json:"region"`
-	AccountID           string `json:"account_id"`
-	Group               string `json:"group"`
-	Service             string `json:"service"`
-	Title               string `json:"title"`
-	ComplianceCheckType string `json:"compliance_check_type"`
-	CloudProvider       string `json:"cloud_provider"`
-	NodeName            string `json:"node_name"`
-	NodeID              string `json:"node_id"`
-	ScanID              string `json:"scan_id"`
-	Masked              string `json:"masked"`
-	Type                string `json:"type"`
-	ControlID           string `json:"control_id"`
-	Description         string `json:"description"`
-	Severity            string `json:"severity"`
 }
 
 type WebIdentitySessionContext struct {
@@ -949,46 +900,25 @@ func packetCaptureConfig(respWrite http.ResponseWriter, req *http.Request) {
 	fmt.Fprintf(respWrite, string(captureConfig))
 }
 
-type dfCveStruct struct {
-	Count                      int      `json:"count"`
-	Timestamp                  string   `json:"@timestamp"`
-	CveTuple                   string   `json:"cve_id_cve_severity_cve_container_image"`
-	DocId                      string   `json:"doc_id"`
-	Masked                     string   `json:"masked"`
-	Type                       string   `json:"type"`
-	Host                       string   `json:"host"`
-	HostName                   string   `json:"host_name"`
-	KubernetesClusterName      string   `json:"kubernetes_cluster_name"`
-	NodeType                   string   `json:"node_type"`
-	Scan_id                    string   `json:"scan_id"`
-	Cve_id                     string   `json:"cve_id"`
-	Cve_type                   string   `json:"cve_type"`
-	Cve_container_image        string   `json:"cve_container_image"`
-	Cve_container_image_id     string   `json:"cve_container_image_id"`
-	Cve_container_name         string   `json:"cve_container_name"`
-	Cve_severity               string   `json:"cve_severity"`
-	Cve_caused_by_package      string   `json:"cve_caused_by_package"`
-	Cve_caused_by_package_path string   `json:"cve_caused_by_package_path"`
-	Cve_container_layer        string   `json:"cve_container_layer"`
-	Cve_fixed_in               string   `json:"cve_fixed_in"`
-	Cve_link                   string   `json:"cve_link"`
-	Cve_description            string   `json:"cve_description"`
-	Cve_cvss_score             float64  `json:"cve_cvss_score"`
-	Cve_overall_score          float64  `json:"cve_overall_score"`
-	Cve_attack_vector          string   `json:"cve_attack_vector"`
-	URLs                       []string `json:"urls"`
-	ExploitPOC                 string   `json:"exploit_poc"`
-}
-
 func ingestInBackground(docType string, body []byte) error {
 	redisConn := redisPool.Get()
 	defer redisConn.Close()
 	currTime := getCurrentTime()
+
+	log.Printf("docType = %v", docType)
+	log.Printf("body = %v", string(body))
 	if docType == cveIndexName {
-		var dfCveStructList []dfCveStruct
+		var dfCveStructList []types.DfCveStruct
 		err := json.Unmarshal(body, &dfCveStructList)
 		if err != nil {
 			return err
+		}
+		client := topology.NewTopologyClient()
+		if client != nil {
+			err = client.AddCVEs(dfCveStructList)
+			if err != nil {
+				log.Println("err cve " + err.Error())
+			}
 		}
 		bulkService := elastic.NewBulkService(esClient)
 		for _, cveStruct := range dfCveStructList {
@@ -1071,10 +1001,17 @@ func ingestInBackground(docType string, body []byte) error {
 			}
 		}
 	} else if docType == cloudComplianceIndexName {
-		var complianceDocs []CloudComplianceDoc
+		var complianceDocs []types.CloudComplianceDoc
 		err := json.Unmarshal(body, &complianceDocs)
 		if err != nil {
 			return err
+		}
+		client := topology.NewTopologyClient()
+		if client != nil {
+			err = client.AddCloudCompliances(complianceDocs)
+			if err != nil {
+				log.Println("err cloud compliance " + err.Error())
+			}
 		}
 		bulkService := elastic.NewBulkService(esClient)
 		for _, complianceDoc := range complianceDocs {
@@ -1114,10 +1051,17 @@ func ingestInBackground(docType string, body []byte) error {
 		}
 		bulkService.Do(context.Background())
 	} else if docType == complianceIndexName {
-		var complianceDocs []ComplianceDoc
+		var complianceDocs []types.ComplianceDoc
 		err := json.Unmarshal(body, &complianceDocs)
 		if err != nil {
 			return err
+		}
+		client := topology.NewTopologyClient()
+		if client != nil {
+			err = client.AddCompliances(complianceDocs)
+			if err != nil {
+				log.Println("err cloud compliance " + err.Error())
+			}
 		}
 		bulkService := elastic.NewBulkService(esClient)
 		for _, complianceDoc := range complianceDocs {
@@ -1196,6 +1140,39 @@ func ingestInBackground(docType string, body []byte) error {
 		for _, r := range failed {
 			log.Printf("error cloudtrail-alert doc %s %s", r.Error.Type, r.Error.Reason)
 		}
+
+	} else if docType == "secret-scan" {
+		var secret map[string]interface{}
+		err := json.Unmarshal(body, &secret)
+		if err == nil {
+			client := topology.NewTopologyClient()
+			if client != nil {
+				err = client.AddSecrets([]map[string]interface{}{secret})
+				if err != nil {
+					log.Println("err secret " + err.Error())
+				} else {
+					log.Println("Added secret")
+				}
+			}
+		}
+		bulkService := elastic.NewBulkService(esClient)
+		bulkIndexReq := elastic.NewBulkIndexRequest()
+		bulkIndexReq.Index(docType).Doc(string(body))
+		bulkService.Add(bulkIndexReq)
+		res, _ := bulkService.Do(context.Background())
+		if res != nil && res.Errors {
+			for _, item := range res.Items {
+				resItem := item["index"]
+				if resItem != nil {
+					fmt.Println(resItem.Index)
+					fmt.Println("status:" + strconv.Itoa(resItem.Status))
+					if resItem.Error != nil {
+						fmt.Println("Error Type:" + resItem.Error.Type)
+						fmt.Println("Error Reason: " + resItem.Error.Reason)
+					}
+				}
+			}
+		}
 	} else {
 		bulkService := elastic.NewBulkService(esClient)
 		bulkIndexReq := elastic.NewBulkIndexRequest()
@@ -1219,7 +1196,7 @@ func ingestInBackground(docType string, body []byte) error {
 	return nil
 }
 
-func processResourceNode(docs []CloudComplianceDoc) {
+func processResourceNode(docs []types.CloudComplianceDoc) {
 	if len(docs) == 0 {
 		return
 	}
@@ -1261,6 +1238,22 @@ func processResourceNode(docs []CloudComplianceDoc) {
 	}
 }
 
+func send_to_neo4j(json []byte) error {
+	client := &http.Client{}
+	req, err := http.NewRequest("POST", "http://deepfence-api:9997/neo4j-ingest", bytes.NewBuffer(json))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, err = ioutil.ReadAll(resp.Body)
+	return err
+}
+
 func ingest(respWrite http.ResponseWriter, req *http.Request) {
 	// Send data to elasticsearch
 	defer req.Body.Close()
@@ -1276,6 +1269,39 @@ func ingest(respWrite http.ResponseWriter, req *http.Request) {
 	docType := req.URL.Query().Get("doc_type")
 	docType = convertRootESIndexToCustomerSpecificESIndex(docType)
 	go ingestInBackground(docType, body)
+	//go send_to_neo4j(body)
+	respWrite.WriteHeader(http.StatusOK)
+	fmt.Fprintf(respWrite, "Ok")
+}
+
+func ingestCloudResources(respWrite http.ResponseWriter, req *http.Request) {
+	defer req.Body.Close()
+	if req.Method != "POST" {
+		http.Error(respWrite, "invalid request", http.StatusInternalServerError)
+		return
+	}
+	body, err := ioutil.ReadAll(req.Body)
+	if err != nil {
+		http.Error(respWrite, "Error reading request body", http.StatusInternalServerError)
+		return
+	}
+	var cloud_resources []types.CloudResource
+	err = json.Unmarshal(body, &cloud_resources)
+	if err == nil {
+		client := topology.NewTopologyClient()
+		if client != nil {
+			err = client.AddCloudResources(cloud_resources)
+			if err != nil {
+				log.Println("cloud err: " + err.Error())
+			} else {
+				log.Println("Added resource")
+			}
+		}
+	} else {
+		http.Error(respWrite, "Error unmarshalling request body", http.StatusInternalServerError)
+		return
+	}
+
 	respWrite.WriteHeader(http.StatusOK)
 	fmt.Fprintf(respWrite, "Ok")
 }
@@ -1473,6 +1499,21 @@ func main() {
 	vulnerabilityDbUpdater = NewVulnerabilityDbUpdater()
 	go vulnerabilityDbUpdater.updateVulnerabilityDb()
 
+	client := topology.NewTopologyClient()
+	if client == nil {
+		fmt.Printf("Error creating neo4j client")
+	}
+
+	go func() {
+		for {
+			select {
+			case <-time.After(30 * time.Second):
+				err := client.ComputeThreatGraph()
+				fmt.Printf("Threat graph generated %v\n", err)
+			}
+		}
+	}()
+
 	httpMux := http.NewServeMux()
 	httpMux.HandleFunc("/df-api/uploadMultiPart", handleMultiPartPostMethod)
 	httpMux.HandleFunc("/df-api/deleteDumps", handleDeleteDumpsMethod)
@@ -1483,6 +1524,7 @@ func main() {
 	httpMux.HandleFunc("/df-api/registry-credential", registryCredential)
 	httpMux.HandleFunc("/df-api/packet-capture-config", packetCaptureConfig)
 	httpMux.HandleFunc("/df-api/ingest", ingest)
+	httpMux.HandleFunc("/df-api/ingest/cloud_resources", ingestCloudResources)
 	httpMux.HandleFunc("/df-api/masked-cve-id", maskedCveId)
 	// Get user defined tags for a host
 	httpMux.HandleFunc("/df-api/user-defined-tags", handleUserDefinedTags)
