@@ -230,7 +230,7 @@ func wasAttachedToNewer(ctx context.Context, version string, nodeId string) (boo
 	return semver.Compare(prev_ver, version) == 1, prev_ver, nil
 }
 
-func CompleteAgentUpgrade(ctx context.Context, version string, nodeId string) error {
+func CompleteAgentUpgrade(ctx context.Context, version string, nodeId, nodeType string) error {
 
 	has, err := hasPendingUpgradeOrNew(ctx, version, nodeId)
 
@@ -272,15 +272,16 @@ func CompleteAgentUpgrade(ctx context.Context, version string, nodeId string) er
 	}
 
 	_, err = tx.Run(`
-		MERGE (n:Node{node_id:$node_id})
+		MERGE (n:Node{node_id:$node_id, node_type:$node_type})
 		MERGE (v:AgentVersion{node_id:$version})
 		MERGE (n) -[r:VERSIONED]-> (v)
 		WITH n, v
 		OPTIONAL MATCH (v) -[r:SCHEDULED]-> (n)
 		DELETE r`,
 		map[string]interface{}{
-			"version": version,
-			"node_id": nodeId,
+			"version":   version,
+			"node_id":   nodeId,
+			"node_type": nodeType,
 		})
 
 	if err != nil {
