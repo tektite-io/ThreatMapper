@@ -31,7 +31,6 @@ import {
   TableNoDataElement,
   TableSkeleton,
   Tabs,
-  Tooltip,
 } from 'ui-components';
 
 import { getCloudNodesApiClient, getScanResultsApiClient } from '@/api/api';
@@ -50,7 +49,6 @@ import {
 } from '@/components/forms/SearchableCloudAccountsList';
 import { SearchableClusterList } from '@/components/forms/SearchableClusterList';
 import { SearchableHostList } from '@/components/forms/SearchableHostList';
-import { ArrowUpCircleLine } from '@/components/icons/common/ArrowUpCircleLine';
 import { EllipsisIcon } from '@/components/icons/common/Ellipsis';
 import { ErrorStandardLineIcon } from '@/components/icons/common/ErrorStandardLine';
 import { FilterIcon } from '@/components/icons/common/Filter';
@@ -62,6 +60,7 @@ import { CLOUDS } from '@/components/scan-configure-forms/ComplianceScanConfigur
 import { StopScanForm } from '@/components/scan-configure-forms/StopScanForm';
 import { ScanStatusBadge } from '@/components/ScanStatusBadge';
 import { PostureIcon } from '@/components/sideNavigation/icons/Posture';
+import { TruncatedText } from '@/components/TruncatedText';
 import { getColorForCompliancePercent } from '@/constants/charts';
 import { useDownloadScan } from '@/features/common/data-component/downloadScanAction';
 import {
@@ -96,7 +95,6 @@ import {
   useSortingState,
 } from '@/utils/table';
 import { usePageNavigation } from '@/utils/usePageNavigation';
-import { isUpgradeAvailable } from '@/utils/version';
 
 enum ActionEnumType {
   DELETE = 'delete',
@@ -830,12 +828,6 @@ const BulkActions = ({
   );
 };
 
-const useGetAgentVersions = () => {
-  return useSuspenseQuery({
-    ...queries.setting.listAgentVersion(),
-  });
-};
-
 const AccountTable = ({
   setRowSelectionState,
   rowSelectionState,
@@ -851,8 +843,6 @@ const AccountTable = ({
 }) => {
   const [searchParams, setSearchParams] = useSearchParams();
   const { data } = usePostureAccounts();
-  const { data: versionsData } = useGetAgentVersions();
-  const versions = versionsData.versions ?? [];
 
   const [sort, setSort] = useSortingState();
 
@@ -1055,44 +1045,7 @@ const AccountTable = ({
         columnHelper.accessor('version', {
           enableSorting: false,
           cell: (info) => {
-            const upgradeAvailable = isUpgradeAvailable(info.getValue(), versions);
-            return (
-              <div className="flex items-center gap-2 justify-start">
-                <div className="truncate">{info.getValue() ?? ''}</div>
-                {upgradeAvailable && (
-                  <Tooltip
-                    content={
-                      <div className="flex-col gap-2 dark:text-text-text-and-icon">
-                        <div className="text-h5">Update Available.</div>
-                        <div className="text-p6">
-                          Version <span className="text-h6">{versions[0]}</span> is
-                          available. Please follow{' '}
-                          <DFLink
-                            href="https://community.deepfence.io/threatmapper/docs/cloudscanner/"
-                            target="_blank"
-                          >
-                            these instructions
-                          </DFLink>{' '}
-                          to upgrade the scanner. If you need automatic updates to the
-                          scanner, please try{' '}
-                          <DFLink
-                            href="https://www.deepfence.io/threatstryker"
-                            target="_blank"
-                          >
-                            ThreatStryker
-                          </DFLink>
-                          .
-                        </div>
-                      </div>
-                    }
-                  >
-                    <div className="h-4 w-4 dark:text-status-warning">
-                      <ArrowUpCircleLine />
-                    </div>
-                  </Tooltip>
-                )}
-              </div>
-            );
+            return <TruncatedText text={info.getValue() ?? ''} />;
           },
           header: () => 'Version',
           ...columnWidth.version,
@@ -1101,7 +1054,7 @@ const AccountTable = ({
     }
 
     return columns;
-  }, [rowSelectionState, searchParams, data, nodeType, versions]);
+  }, [rowSelectionState, searchParams, data, nodeType]);
 
   return (
     <>

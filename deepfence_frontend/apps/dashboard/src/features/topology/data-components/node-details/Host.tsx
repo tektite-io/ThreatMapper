@@ -78,6 +78,7 @@ export const Host = (props: HostModalProps) => {
             showBackBtn={showBackBtn}
             availableScanTypes={[]}
             showInstallAgentOption={false}
+            showUpgradeAgentOption={false}
           />
         }
       >
@@ -138,6 +139,7 @@ const HostHeader = ({
           : []
       }
       showInstallAgentOption={!data.hostData[0].agent_running}
+      showUpgradeAgentOption={data.hostData[0].agent_running}
     />
   );
 };

@@ -1,30 +1,39 @@
-import { useRef, useState } from 'react';
+import { MouseEventHandler, useEffect, useRef, useState } from 'react';
 import { Tooltip } from 'ui-components';
+
+const delay = 200;
 
 export const TruncatedText = ({ text }: { text: string }) => {
   const [showTooltip, setShowTooltip] = useState(false);
-  const innerRef = useRef<HTMLDivElement>(null);
+  const timeoutRef = useRef<number | null>(null);
 
-  const inner = (
-    <div
-      className="w-full truncate"
-      ref={innerRef}
-      onMouseEnter={(e) => {
-        if (innerRef.current) {
-          setShowTooltip(innerRef.current.scrollWidth > innerRef.current.clientWidth);
-        }
-      }}
-    >
-      {text}
-    </div>
+  const handleShouldShow: MouseEventHandler<HTMLDivElement> = ({ currentTarget }) => {
+    if (currentTarget.scrollWidth > currentTarget.clientWidth) {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      timeoutRef.current = setTimeout(() => {
+        setShowTooltip(true);
+      }, delay) as unknown as number;
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, []);
+
+  return (
+    <Tooltip content={text} triggerAsChild open={showTooltip}>
+      <div
+        className="w-full truncate"
+        onMouseEnter={handleShouldShow}
+        onMouseLeave={() => {
+          if (timeoutRef.current) clearTimeout(timeoutRef.current);
+          setShowTooltip(false);
+        }}
+      >
+        {text}
+      </div>
+    </Tooltip>
   );
-
-  if (showTooltip) {
-    return (
-      <Tooltip content={text} delayDuration={200} triggerAsChild>
-        {inner}
-      </Tooltip>
-    );
-  }
-  return inner;
 };

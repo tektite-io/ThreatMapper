@@ -242,6 +242,7 @@ export function getControlsApiClient() {
     listControls: controlsApi.getCloudNodeControls.bind(controlsApi),
     enableControl: controlsApi.enableCloudNodeControls.bind(controlsApi),
     disableControl: controlsApi.disableCloudNodeControls.bind(controlsApi),
+    upgradeAgentVersion: controlsApi.upgradeAgentVersion.bind(controlsApi),
   };
 }
 

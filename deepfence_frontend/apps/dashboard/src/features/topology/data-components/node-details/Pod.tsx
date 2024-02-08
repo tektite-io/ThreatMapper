@@ -64,6 +64,7 @@ export const Pod = (props: PodModalProps) => {
             showBackBtn={showBackBtn}
             availableScanTypes={[]}
             showInstallAgentOption={false}
+            showUpgradeAgentOption={false}
           />
         }
       >
@@ -117,6 +118,7 @@ const PodHeader = ({
         ScanTypeEnum.MalwareScan,
       ]}
       showInstallAgentOption={false}
+      showUpgradeAgentOption={false}
     />
   );
 };

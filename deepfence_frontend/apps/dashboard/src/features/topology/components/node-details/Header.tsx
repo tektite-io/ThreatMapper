@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Button, Dropdown, DropdownItem, SlidingModalHeader } from 'ui-components';
 
 import { ConfigureScanModalProps } from '@/components/ConfigureScanModal';
@@ -8,6 +9,7 @@ import { PostureIcon } from '@/components/sideNavigation/icons/Posture';
 import { SecretsIcon } from '@/components/sideNavigation/icons/Secrets';
 import { VulnerabilityIcon } from '@/components/sideNavigation/icons/Vulnerability';
 import { TruncatedText } from '@/components/TruncatedText';
+import { UpgrageAgentModal } from '@/features/topology/data-components/UpgradeAgentModal';
 import { getNodeImage } from '@/features/topology/utils/graph-styles';
 import { ScanTypeEnum } from '@/types/common';
 
@@ -20,6 +22,7 @@ export const Header = ({
   onStartScanClick,
   availableScanTypes,
   showInstallAgentOption,
+  showUpgradeAgentOption,
 }: {
   nodeId: string;
   nodeType: string;
@@ -29,8 +32,12 @@ export const Header = ({
   onStartScanClick: (scanOptions: ConfigureScanModalProps['scanOptions']) => void;
   availableScanTypes: ScanTypeEnum[];
   showInstallAgentOption: boolean;
+  showUpgradeAgentOption: boolean;
 }) => {
-  const showDropdown = !!availableScanTypes.length;
+  const showDropdown =
+    !!availableScanTypes.length || showInstallAgentOption || showUpgradeAgentOption;
+
+  const [agentUpgradeModal, setAgentUpgradeModal] = useState(false);
 
   return (
     <SlidingModalHeader>
@@ -137,6 +144,17 @@ export const Header = ({
                     Start Posture Scan
                   </DropdownItem>
                 ) : null}
+                {showUpgradeAgentOption ? (
+                  <DropdownItem
+                    onSelect={(e) => {
+                      e.preventDefault();
+                      setAgentUpgradeModal(true);
+                    }}
+                    icon={<ArrowLine />}
+                  >
+                    Upgrade Agent
+                  </DropdownItem>
+                ) : null}
                 {/* TODO: show install agent option here once api is ready */}
               </>
             }
@@ -146,6 +164,16 @@ export const Header = ({
             </Button>
           </Dropdown>
         ) : null}
+        {agentUpgradeModal && (
+          <UpgrageAgentModal
+            nodes={[
+              {
+                nodeId,
+              },
+            ]}
+            setShowDialog={setAgentUpgradeModal}
+          />
+        )}
       </div>
     </SlidingModalHeader>
   );
