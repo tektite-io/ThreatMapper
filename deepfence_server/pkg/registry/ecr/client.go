@@ -66,6 +66,18 @@ func listNonIAMImages(awsAccessKey, awsSecretKey, awsAccountID, awsRegion string
 }
 
 func getAWSAccountID() (string, error) {
+	imdsVersion, err := getIMDSVersion()
+	if err != nil {
+		return "", fmt.Errorf("error getting IMDS version: %s", err.Error())
+	}
+	if imdsVersion == "v2" {
+		return getIMDSv2AWSAccountID()
+	} else {
+		return getIMDSv1AWSAccountID()
+	}
+}
+
+func getIMDSv1AWSAccountID() (string, error) {
 	// Send a GET request to the instance metadata service to retrieve the AWS Account ID
 	resp, err := http.Get("http://169.254.169.254/latest/dynamic/instance-identity/document")
 	if err != nil {
@@ -86,4 +98,73 @@ func getAWSAccountID() (string, error) {
 	}
 
 	return awsSelfQuery.AccountID, nil
+}
+
+func getIMDSv2AWSAccountID() (string, error) {
+	token, err := getIMDSv2Token()
+	if err != nil {
+		return "", fmt.Errorf("error fetching token for IMDS v2: %s", err.Error())
+	}
+	req, err := http.NewRequest("GET", "http://169.254.169.254/latest/dynamic/instance-identity/document", nil)
+	if err != nil {
+		return "", fmt.Errorf("error creating IMDSv2 identity document request: %s", err.Error())
+	}
+	req.Header.Set("X-aws-ec2-metadata-token", token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("error getting IMDSv2 identity document: %s", err.Error())
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("error reading IMDSv2 identity document: %s", err.Error())
+	}
+
+	var awsSelfQuery AWSSelfQuery
+	err = json.Unmarshal(body, &awsSelfQuery)
+	if err != nil {
+		return "", fmt.Errorf("error unmarshalling IMDSv2 identity document: %s", err.Error())
+	}
+	return awsSelfQuery.AccountID, nil
+}
+
+func getIMDSv2Token() (string, error) {
+	// Send a PUT request to the instance metadata service to get the token
+	req, err := http.NewRequest("PUT", "http://169.254.169.254/latest/api/token", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("X-aws-ec2-metadata-token-ttl-seconds", "60")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	// Read the response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
+}
+
+func getIMDSVersion() (string, error) {
+	// Send a GET request to the instance metadata service to check the IMDS version(v1 or v2)
+	resp, err := http.Get("http://169.254.169.254/")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	// Read the response status
+	if resp.StatusCode == http.StatusUnauthorized {
+		return "v2", nil
+	} else if resp.StatusCode == http.StatusOK {
+		return "v1", nil
+	} else {
+		return "", fmt.Errorf("error getting IMDS version")
+	}
 }
