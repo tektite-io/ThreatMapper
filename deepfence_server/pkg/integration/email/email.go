@@ -132,7 +132,25 @@ func (e Email) IsEmailConfigured(ctx context.Context) bool {
 	return true
 }
 
+// todo
 // In case of email basic validation and regex check should be enough
 func (e Email) IsValidCredential(ctx context.Context) (bool, error) {
-	return true, nil
+	if e.Config.EmailID == "" {
+		return false, errors.New("email id is empty")
+	}
+
+	// send test email to check if email is valid
+	emailSender, err := sendemail.NewEmailSender(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	subject := "Your Email has been added to Deepfence Subscription"
+	body := "Your email has been added to Deepfence Subscription by . If you have received this email, your email has been successfully added to Deepfence Subscription."
+	// make body html with action button
+	action := fmt.Sprintf("Contact Support <a href='mailto:%s'>support</a>", "support@deepfence.io")
+
+	bodyHTML := fmt.Sprintf("<html><body><p>%s</p><p>%s</p></body></html>", body, action)
+
+	return emailSender.Send([]string{e.Config.EmailID}, subject, "", bodyHTML, nil) == nil, nil
 }
