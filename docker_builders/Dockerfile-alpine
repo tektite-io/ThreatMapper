@@ -35,6 +35,8 @@ RUN apk add --no-cache -t .build-deps py-setuptools \
     libcrypto3 \
     linux-headers
 
+RUN git config --global --add safe.directory /src
+
 RUN cd /root \
     && wget https://github.com/VirusTotal/yara/archive/refs/tags/v4.3.2.tar.gz \
     && tar -zxf v4.3.2.tar.gz \

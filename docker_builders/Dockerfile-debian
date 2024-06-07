@@ -39,6 +39,8 @@ RUN apt-get -qq -y --no-install-recommends install \
     libyaml-dev \
     libvectorscan-dev
 
+RUN git config --global --add safe.directory /src
+
 RUN cd /root  \
     && wget https://github.com/VirusTotal/yara/archive/refs/tags/v4.3.2.tar.gz \
     && tar -zxf v4.3.2.tar.gz \

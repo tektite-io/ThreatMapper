@@ -17,6 +17,8 @@ RUN apt-get -qq -y --no-install-recommends install \
     libjansson-dev libmagic-dev \
     cmake flex bison libyaml-dev
 
+RUN git config --global --add safe.directory /src
+
 RUN cd /root  \
     && wget https://github.com/VirusTotal/yara/archive/refs/tags/v4.3.2.tar.gz \
     && tar -zxf v4.3.2.tar.gz \
