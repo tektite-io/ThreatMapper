@@ -4,6 +4,7 @@ ARG IMAGE_REPOSITORY=deepfenceio
 FROM golang:1.21-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive
+
 RUN apt-get update
 RUN apt-get install -y
 RUN apt-get -qq -y --no-install-recommends install \
@@ -38,6 +39,8 @@ RUN apt-get -qq -y --no-install-recommends install \
     bison \
     libyaml-dev \
     libvectorscan-dev
+
+RUN git config --global --add safe.directory /src
 
 RUN cd /root  \
     && wget https://github.com/VirusTotal/yara/archive/refs/tags/v4.3.2.tar.gz \
