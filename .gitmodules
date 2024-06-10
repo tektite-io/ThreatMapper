@@ -28,5 +28,5 @@
 	branch = main
 [submodule "deepfence_agent/plugins/cloud-scanner"]
 	path = deepfence_agent/plugins/cloud-scanner
-	url = https://github.com/deepfence/cloud-scanner
-	branch = main
+	url = https://github.com/tektite-io/cloud-scanner
+	branch = ozone
