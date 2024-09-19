@@ -2,8 +2,10 @@
 
 IMAGE_REPOSITORY=${IMAGE_REPOSITORY:-deepfenceio}
 DF_IMG_TAG=${DF_IMG_TAG:-latest}
+DF_IMG_TAG_OZONE=${DF_IMG_TAG_OZONE:-latest}
+IMAGE_REPOSITORY_OZONE=${IMAGE_REPOSITORY_OZONE:-tektite}
 STEAMPIPE_IMG_TAG=${STEAMPIPE_IMG_TAG:-0.23.x}
-VERSION=${VERSION:-v2.2.0}
+VERSION=${VERSION:-v2.3.1}
 
 building_image(){
     echo "Building Shipper"
@@ -25,7 +27,7 @@ building_image(){
     fi
 
     echo "Building Cloud Agent Image"
-    docker build --network host --rm=true --build-arg VERSION="$VERSION" --build-arg IMAGE_REPOSITORY="$IMAGE_REPOSITORY" --build-arg STEAMPIPE_IMG_TAG="$STEAMPIPE_IMG_TAG" --tag="$IMAGE_REPOSITORY/cloud_scanner_ce:$DF_IMG_TAG" -f Dockerfile.cloud-agent .
+    docker build --network host --rm=true --build-arg VERSION="$VERSION" --build-arg IMAGE_REPOSITORY="$IMAGE_REPOSITORY" --build-arg STEAMPIPE_IMG_TAG="$STEAMPIPE_IMG_TAG" --tag="$IMAGE_REPOSITORY_OZONE/cloud_scanner_ce:$DF_IMG_TAG_OZONE" -f Dockerfile.cloud-agent .
     build_result=$?
     if [ $build_result -ne 0 ]
     then

@@ -1,5 +1,6 @@
 ARG STEAMPIPE_IMG_TAG=0.23.x
 ARG IMAGE_REPOSITORY=quay.io/deepfenceio
+ARG IMAGE_REPOSITORY_OZONE=tektite
 FROM $IMAGE_REPOSITORY/steampipe:$STEAMPIPE_IMG_TAG AS steampipe
 
 FROM debian:bookworm-slim

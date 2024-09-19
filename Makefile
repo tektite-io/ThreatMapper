@@ -15,7 +15,9 @@ export DEEPFENCE_CTL=$(PWD)/deepfence_ctl
 export DEEPFENCED=$(PWD)/deepfence_bootstrapper
 export DEEPFENCE_FARGATE_DIR=$(DEEPFENCE_AGENT_DIR)/agent-binary
 export IMAGE_REPOSITORY?=quay.io/deepfenceio
+export IMAGE_REPOSITORY_OZONE?=tektite
 export DF_IMG_TAG?=latest
+export DF_IMG_TAG_OZONE?=2.3.1-ozone
 export STEAMPIPE_IMG_TAG?=0.23.x
 export IS_DEV_BUILD?=false
 export VERSION?=v2.3.1
@@ -151,7 +153,7 @@ compliancescanner:
 
 .PHONY: cloudscanner
 cloudscanner: debian_builder deepfenced
-	(cd $(DEEPFENCE_AGENT_DIR) && IMAGE_REPOSITORY=$(IMAGE_REPOSITORY) DF_IMG_TAG=$(DF_IMG_TAG) VERSION=$(VERSION) bash build_cloud_agent.sh)
+	(cd $(DEEPFENCE_AGENT_DIR) && IMAGE_REPOSITORY=$(IMAGE_REPOSITORY) DF_IMG_TAG=$(DF_IMG_TAG) IMAGE_REPOSITORY_OZONE=$(IMAGE_REPOSITORY_OZONE) DF_IMG_TAG_OZONE=$(DF_IMG_TAG_OZONE) VERSION=$(VERSION) bash build_cloud_agent.sh)
 
 .PHONY: openapi
 openapi: server
@@ -249,7 +251,7 @@ publish-jaeger:
 
 .PHONY: publish-cloudscanner
 publish-cloudscanner:
-	docker push $(IMAGE_REPOSITORY)/cloud_scanner_ce:$(DF_IMG_TAG)
+	docker push $(IMAGE_REPOSITORY_OZONE)/cloud_scanner_ce:$(DF_IMG_TAG_OZONE)
 
 .PHONY: clean
 clean:
